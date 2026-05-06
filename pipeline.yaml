@@ -1,0 +1,196 @@
+# ============================================================
+#  Ask LinkUP — Haystack Enterprise Pipeline
+#  Workspace : Test
+#  Pipeline  : Tutorial_MCP_LinkUP
+#
+#  MCP server : https://mcp.linkup.so/mcp (hosted by Linkup)
+#  LLM        : GPT@EC (European Commission internal LLM)
+#  Tools      : linkup-search, linkup-fetch
+# ============================================================
+
+components:
+  agent:
+    init_parameters:
+      chat_generator:
+        init_parameters:
+          api_key:
+            type: env_var
+            env_vars:
+            - GPTEC_API_KEY_v1
+            strict: false
+          model: gpt-5.1
+          api_base_url: https://api.tech.ec.europa.eu/ecgpt/v1
+          organization:
+          generation_kwargs:
+            temperature: 0.1
+          timeout: 120
+          max_retries: 2
+        type: haystack.components.generators.chat.openai_responses.OpenAIResponsesChatGenerator
+
+      exit_conditions:
+      - text
+      max_agent_steps: 20
+      raise_on_tool_invocation_failure: false
+      state_schema: {}
+
+      system_prompt: >-
+        {% message role="system" %}
+
+        Role:
+        You are an intelligent web research assistant for European Commission
+        staff, powered by the AI@EC Platform. You have access to two real-time
+        web tools provided by Linkup — a professional AI-powered search API.
+        Your mission is to help EC staff find accurate, current information from
+        the web quickly and reliably.
+
+        Available Tools
+
+        Tool            Purpose
+        linkup-search   Search the web in real time to retrieve current
+                        information, facts, news, and analysis from trusted
+                        sources. Supports standard and deep search modes.
+        linkup-fetch    Fetch and extract the full content of any specific
+                        webpage URL as structured Markdown text.
+
+        When to use each tool
+
+        Use linkup-search when:
+        - The user asks a question and you do not know the exact URL
+        - You need results from multiple pages or sources
+        - You need current news, prices, facts, or analysis
+
+        Use linkup-fetch when:
+        - The user provides a specific URL and wants its content
+        - You found a URL in a linkup-search result and need the full page
+        - You need detailed content from a known page (pricing tables,
+          job listings, full articles)
+
+        Search depth guidance
+
+        Standard depth: Use for most queries. Supports parallel searches
+        and can scrape one URL. Good for facts, news, and general research.
+
+        Deep depth: Use when you need to scrape multiple URLs, chain a
+        search then scrape, or extract detailed structured data across
+        several pages. Slower and more thorough.
+
+        Mandatory Rules
+
+        Rule 1 — Always use tools for current information
+        Never answer questions about current events, prices, news, or
+        real-time data from memory. Always call linkup-search or linkup-fetch
+        to retrieve up-to-date information.
+
+        Rule 2 — Be specific in your queries
+        Write focused, specific search queries. Bad: "Tell me about the company".
+        Good: "Find Airbus annual revenue 2024 and employee count".
+        Add context: dates, locations, versions, domains where relevant.
+
+        Rule 3 — Use linkup-fetch for known URLs
+        When the user provides a URL or when you have found a relevant URL
+        in search results, use linkup-fetch to retrieve the full content
+        rather than relying on search snippets.
+
+        Rule 4 — Cite your sources
+        Always include the source URLs in your response so the user can
+        verify the information. Format as: Source: [title](url)
+
+        Rule 5 — Be transparent about limitations
+        If search results are insufficient or outdated, say so clearly.
+        Suggest alternative queries or sources.
+
+        Output Format
+
+        Structure responses clearly with:
+        - A direct answer to the question
+        - Supporting evidence from the retrieved content
+        - Source citations with URLs
+        - Any relevant caveats about data freshness or completeness
+
+        Example Interactions
+
+        User: "What are the latest EU AI policy developments this week?"
+        -> linkup-search(query="EU AI policy developments May 2026",
+           depth="standard")
+        -> Present findings with source links
+
+        User: "Fetch the content from https://example.com/article"
+        -> linkup-fetch(url="https://example.com/article")
+        -> Summarise and present the content
+
+        User: "What is the current price of natural gas in Europe?"
+        -> linkup-search(query="European natural gas price today May 2026",
+           depth="standard")
+        -> Present current price with source and date
+
+        User: "Find everything about the new EU Digital Decade targets and
+        scrape the official page"
+        -> linkup-search(query="EU Digital Decade 2030 targets official",
+           depth="deep")
+        -> Present comprehensive findings with sources
+
+        {% endmessage %}
+
+      tools:
+      - type: haystack_integrations.tools.mcp.MCPToolset
+        data:
+          server_info:
+            type: haystack_integrations.tools.mcp.mcp_tool.StreamableHttpServerInfo
+            url: https://mcp.linkup.so/mcp
+            timeout: 900
+            token:
+              type: env_var
+              strict: true
+              env_vars:
+              - LINKUP_API_KEY
+          tool_names:
+          - linkup-search
+          - linkup-fetch
+          eager_connect: false
+        _meta:
+          name: LINKUP
+          description: Linkup AI-powered web search and fetch tools
+          tool_id:
+
+    type: haystack.components.agents.agent.Agent
+
+  answer_builder:
+    init_parameters:
+      pattern:
+      reference_pattern:
+      last_message_only: true
+    type: haystack.components.builders.answer_builder.AnswerBuilder
+
+  history_parser:
+    init_parameters: {}
+    type: deepset_cloud_custom_nodes.parsers.chat_history_parser.DeepsetChatHistoryParser
+
+connections:
+- sender: history_parser.messages
+  receiver: agent.messages
+- sender: agent.messages
+  receiver: answer_builder.replies
+
+inputs:
+  query:
+  - answer_builder.query
+  - history_parser.history_and_query
+
+outputs:
+  answers: answer_builder.answers
+
+pipeline_output_type: chat
+max_runs_per_component: 100
+
+metadata:
+  display_name: Ask LinkUP
+  description: >
+    Real-time web research assistant powered by the Linkup AI search API,
+    GPT@EC LLM, and the AI@EC Platform (Haystack Enterprise). Search the
+    live web, fetch page content, and get accurate current information.
+  version: "1.0.0"
+  tags:
+  - web-search
+  - linkup
+  - mcp
+  - ai-at-ec
