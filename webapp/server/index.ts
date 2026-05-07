@@ -11,14 +11,115 @@ app.use(express.json());
 
 const DEEPSET_API_BASE = "https://api.cloud.deepset.ai/api/v1";
 const DEFAULT_WORKSPACE = "Test";
-const DEFAULT_PIPELINE = "Tutorial_MCP_LinkUP";
+const DEFAULT_PIPELINE  = "Tutorial_MCP_LinkUP";
 
 let cachedPipelineId: string = "";
 
+// ── Pipeline status types ─────────────────────────────────────────────────────
+// Deepset statuses: DEPLOYED | UNDEPLOYED | DEPLOYMENT_IN_PROGRESS |
+//                  UNDEPLOYMENT_IN_PROGRESS | FAILED_TO_DEPLOY | IDLE
+// We map these to a simplified set for the frontend
+type PipelineStatus = "DEPLOYED" | "ACTIVATING" | "INACTIVE" | "FAILED" | "UNKNOWN";
+
+function mapStatus(raw: string): PipelineStatus {
+  switch (raw) {
+    case "DEPLOYED":                  return "DEPLOYED";
+    case "DEPLOYMENT_IN_PROGRESS":    return "ACTIVATING";
+    case "UNDEPLOYED":
+    case "UNDEPLOYMENT_IN_PROGRESS":
+    case "IDLE":                      return "INACTIVE";
+    case "FAILED_TO_DEPLOY":          return "FAILED";
+    default:                          return "UNKNOWN";
+  }
+}
+
+// ── GET /api/status — check pipeline status ───────────────────────────────────
+app.get("/api/status", async (req, res) => {
+  const workspace = (req.query.workspace as string) || DEFAULT_WORKSPACE;
+  const pipeline  = (req.query.pipeline  as string) || DEFAULT_PIPELINE;
+
+  const key = process.env.AIECPLATFORM_API_KEY;
+  if (!key) {
+    res.status(401).json({ error: "AIECPLATFORM_API_KEY is not set on the server." });
+    return;
+  }
+
+  try {
+    const url = DEEPSET_API_BASE + "/workspaces/" + workspace + "/pipelines/" + pipeline;
+    const response = await fetch(url, {
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      res.status(response.status).json({ error: "Failed to get pipeline status: " + text });
+      return;
+    }
+
+    const json = await response.json();
+    const raw    = json.status || "UNKNOWN";
+    const status = mapStatus(raw);
+    const pipelineId = json.pipeline_id || json.id || "";
+
+    // Cache the pipeline ID if we have it
+    if (pipelineId && !cachedPipelineId) cachedPipelineId = pipelineId;
+
+    res.json({
+      status,
+      raw_status:  raw,
+      pipeline_id: pipelineId,
+      desired_status: json.desired_status || "",
+      idle_timeout_in_seconds: json.idle_timeout_in_seconds || 1200,
+    });
+
+  } catch (err: any) {
+    console.error("Status check error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/activate — trigger pipeline deployment ──────────────────────────
+app.post("/api/activate", async (req, res) => {
+  const workspace = req.body.workspace || DEFAULT_WORKSPACE;
+  const pipeline  = req.body.pipeline  || DEFAULT_PIPELINE;
+
+  const key = process.env.AIECPLATFORM_API_KEY;
+  if (!key) {
+    res.status(401).json({ error: "AIECPLATFORM_API_KEY is not set on the server." });
+    return;
+  }
+
+  try {
+    const url = DEEPSET_API_BASE + "/workspaces/" + workspace + "/pipelines/" + pipeline + "/deploy";
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      // 409 means already deployed — that's fine
+      if (response.status === 409) {
+        res.json({ status: "DEPLOYED", message: "Pipeline is already deployed." });
+        return;
+      }
+      res.status(response.status).json({ error: "Failed to activate pipeline: " + text });
+      return;
+    }
+
+    // Reset cached pipeline ID so it gets refreshed after deployment
+    cachedPipelineId = "";
+    res.json({ status: "ACTIVATING", message: "Pipeline activation started." });
+
+  } catch (err: any) {
+    console.error("Activation error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Helper functions ──────────────────────────────────────────────────────────
 async function getPipelineId(
-  workspace: string,
-  pipeline: string,
-  key: string
+  workspace: string, pipeline: string, key: string
 ): Promise<string> {
   const url = DEEPSET_API_BASE + "/workspaces/" + workspace + "/pipelines/" + pipeline;
   const res = await fetch(url, {
@@ -37,9 +138,7 @@ async function getPipelineId(
 }
 
 async function createSearchSession(
-  workspace: string,
-  pipelineId: string,
-  key: string
+  workspace: string, pipelineId: string, key: string
 ): Promise<string> {
   const url = DEEPSET_API_BASE + "/workspaces/" + workspace + "/search_sessions";
   const res = await fetch(url, {
@@ -57,8 +156,7 @@ async function createSearchSession(
 }
 
 async function callDeepsetChat(
-  url: string,
-  key: string,
+  url: string, key: string,
   body: { queries: string[]; search_session_id: string }
 ): Promise<Response> {
   return fetch(url, {
@@ -68,10 +166,11 @@ async function callDeepsetChat(
   });
 }
 
+// ── POST /api/chat ─────────────────────────────────────────────────────────────
 app.post("/api/chat", async (req, res) => {
-  const messages = req.body.messages;
+  const messages  = req.body.messages;
   const workspace = req.body.workspace || DEFAULT_WORKSPACE;
-  const pipeline = req.body.pipeline || DEFAULT_PIPELINE;
+  const pipeline  = req.body.pipeline  || DEFAULT_PIPELINE;
 
   const key = process.env.AIECPLATFORM_API_KEY;
   if (!key) {
