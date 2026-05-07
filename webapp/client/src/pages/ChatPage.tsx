@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChat, Conversation } from "../hooks/useChat";
+import { usePipelineStatus } from "../hooks/usePipelineStatus";
+import PipelineStatusBar from "../components/PipelineStatusBar";
 
 const SUGGESTED = [
   "What are the latest EU AI policy developments this week?",
@@ -103,6 +105,7 @@ function HistoryPanel({ history, onLoad, onDelete, onClearAll, onClose }: {
 
 export default function ChatPage() {
   const { messages, streaming, activeTool, sendMessage, stop, newChat, history, loadConversation, deleteConversation, clearHistory } = useChat();
+  const { info, activating, checkStatus, activate } = usePipelineStatus();
   const [input, setInput] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -125,6 +128,8 @@ export default function ChatPage() {
   return (
     <div style={{ display: "flex", height: "calc(100vh - var(--header-height) - var(--topbar-height))", overflow: "hidden" }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+
+        <PipelineStatusBar status={info.status} message={info.message} activating={activating} onActivate={activate} onRefresh={() => checkStatus(true)} />
 
         {/* Toolbar */}
         <div style={{ borderBottom: "1px solid var(--gray-200)", background: "var(--white)", padding: "var(--space-3) var(--space-5)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
@@ -224,12 +229,12 @@ export default function ChatPage() {
           <form onSubmit={handleSubmit} style={{ maxWidth: 860, margin: "0 auto" }}>
             <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", background: "var(--gray-50)", border: "1.5px solid var(--gray-200)", borderRadius: "var(--radius-lg)", padding: "var(--space-2) var(--space-3)" }}>
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                placeholder="Ask anything — search the web, fetch a URL, find current news..."
-                rows={1} disabled={streaming}
+                placeholder={info.canChat ? "Ask anything — search the web, fetch a URL, find current news..." : "Waiting for pipeline to become active..."}
+                rows={1} disabled={streaming || !info.canChat}
                 style={{ flex: 1, border: "none", background: "transparent", resize: "none", outline: "none", fontSize: "0.95rem", lineHeight: 1.6, color: "var(--gray-900)", padding: "var(--space-2)", maxHeight: 160, overflowY: "auto", fontFamily: "inherit" }}
                 onInput={e => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 160) + "px"; }} />
-              <button type={streaming ? "button" : "submit"} onClick={streaming ? stop : undefined} disabled={!streaming && !input.trim()}
-                style={{ background: streaming ? "var(--danger)" : "var(--ec-blue)", border: "none", borderRadius: "var(--radius-sm)", padding: "var(--space-2) var(--space-4)", color: "var(--white)", cursor: "pointer", fontSize: "0.875rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "var(--space-2)", opacity: !streaming && !input.trim() ? 0.45 : 1, minWidth: 80, justifyContent: "center", fontFamily: "inherit" }}>
+              <button type={streaming ? "button" : "submit"} onClick={streaming ? stop : undefined} disabled={!streaming && (!input.trim() || !info.canChat)}
+                style={{ background: streaming ? "var(--danger)" : "var(--ec-blue)", border: "none", borderRadius: "var(--radius-sm)", padding: "var(--space-2) var(--space-4)", color: "var(--white)", cursor: "pointer", fontSize: "0.875rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "var(--space-2)", opacity: (!streaming && (!input.trim() || !info.canChat)) ? 0.45 : 1, minWidth: 80, justifyContent: "center", fontFamily: "inherit" }}>
                 {streaming ? (
                   <><svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor"><rect x="2" y="2" width="9" height="9" rx="1" /></svg>Stop</>
                 ) : (
