@@ -219,4 +219,42 @@ app.post("/api/chat", async (req, res) => {
           : upstream.status === 408 || upstream.status === 503
           ? "The pipeline timed out. Please try again."
           : upstream.status === 429
-          ?
+          ? "Too many requests. Please wait a moment and try again."
+          : "Request failed (" + upstream.status + "). Please try again.";
+      res.status(upstream.status).json({ error: userMessage });
+      return;
+    }
+
+    const json = await upstream.json();
+    console.log("Deepset response:", JSON.stringify(json));
+
+    const answer =
+      (json.results && json.results[0] && json.results[0].answers && json.results[0].answers[0] && json.results[0].answers[0].answer) ||
+      (json.results && json.results[0] && json.results[0].answer) ||
+      (json.answers && json.answers[0] && json.answers[0].answer) ||
+      JSON.stringify(json);
+
+    res.json({ answer, sessionId });
+
+  } catch (err: any) {
+    console.error("Server error:", err.message);
+    cachedPipelineId = "";
+    res.status(500).json({ error: "The pipeline encountered a temporary error. Please try your question again." });
+  }
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", version: "1.0.0" });
+});
+
+const distPath = path.join(__dirname, "../../client/dist");
+app.use(express.static(distPath));
+
+app.get(/^(?!\/api).*$/, (req, res) => {
+  res.sendFile(path.join(distPath, "index.html"));
+});
+
+const PORT = process.env.PORT || 3000;
+createServer(app).listen(parseInt(PORT.toString()), "0.0.0.0", () => {
+  console.log("Ask LinkUP server running on port " + PORT);
+});
