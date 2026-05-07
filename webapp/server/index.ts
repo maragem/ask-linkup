@@ -61,7 +61,6 @@ app.get("/api/status", async (req, res) => {
     const status = mapStatus(raw);
     const pipelineId = json.pipeline_id || json.id || "";
 
-    // Cache the pipeline ID if we have it
     if (pipelineId && !cachedPipelineId) cachedPipelineId = pipelineId;
 
     res.json({
@@ -78,7 +77,9 @@ app.get("/api/status", async (req, res) => {
   }
 });
 
-// ── POST /api/activate — trigger pipeline deployment ──────────────────────────
+// ── POST /api/activate — wake up an inactive pipeline ─────────────────────────
+// Uses the /activate endpoint (not /deploy) — this simply wakes the pipeline
+// from standby without redeploying it. Returns 204 No Content on success.
 app.post("/api/activate", async (req, res) => {
   const workspace = req.body.workspace || DEFAULT_WORKSPACE;
   const pipeline  = req.body.pipeline  || DEFAULT_PIPELINE;
@@ -90,25 +91,32 @@ app.post("/api/activate", async (req, res) => {
   }
 
   try {
-    const url = DEEPSET_API_BASE + "/workspaces/" + workspace + "/pipelines/" + pipeline + "/deploy";
+    const url = DEEPSET_API_BASE + "/workspaces/" + workspace + "/pipelines/" + pipeline + "/activate";
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
     });
 
+    // 204 No Content — activation request accepted successfully
+    if (response.status === 204) {
+      res.json({ status: "ACTIVATING", message: "Pipeline activation started." });
+      return;
+    }
+
+    // 409 Conflict — pipeline is already active
+    if (response.status === 409) {
+      res.json({ status: "DEPLOYED", message: "Pipeline is already active." });
+      return;
+    }
+
     if (!response.ok) {
       const text = await response.text();
-      // 409 means already deployed — that's fine
-      if (response.status === 409) {
-        res.json({ status: "DEPLOYED", message: "Pipeline is already deployed." });
-        return;
-      }
+      console.error("Activation error " + response.status + ":", text);
       res.status(response.status).json({ error: "Failed to activate pipeline: " + text });
       return;
     }
 
-    // Reset cached pipeline ID so it gets refreshed after deployment
-    cachedPipelineId = "";
+    // Any other 2xx
     res.json({ status: "ACTIVATING", message: "Pipeline activation started." });
 
   } catch (err: any) {
@@ -211,42 +219,4 @@ app.post("/api/chat", async (req, res) => {
           : upstream.status === 408 || upstream.status === 503
           ? "The pipeline timed out. Please try again."
           : upstream.status === 429
-          ? "Too many requests. Please wait a moment and try again."
-          : "Request failed (" + upstream.status + "). Please try again.";
-      res.status(upstream.status).json({ error: userMessage });
-      return;
-    }
-
-    const json = await upstream.json();
-    console.log("Deepset response:", JSON.stringify(json));
-
-    const answer =
-      (json.results && json.results[0] && json.results[0].answers && json.results[0].answers[0] && json.results[0].answers[0].answer) ||
-      (json.results && json.results[0] && json.results[0].answer) ||
-      (json.answers && json.answers[0] && json.answers[0].answer) ||
-      JSON.stringify(json);
-
-    res.json({ answer, sessionId });
-
-  } catch (err: any) {
-    console.error("Server error:", err.message);
-    cachedPipelineId = "";
-    res.status(500).json({ error: "The pipeline encountered a temporary error. Please try your question again." });
-  }
-});
-
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", version: "1.0.0" });
-});
-
-const distPath = path.join(__dirname, "../../client/dist");
-app.use(express.static(distPath));
-
-app.get(/^(?!\/api).*$/, (req, res) => {
-  res.sendFile(path.join(distPath, "index.html"));
-});
-
-const PORT = process.env.PORT || 3000;
-createServer(app).listen(parseInt(PORT.toString()), "0.0.0.0", () => {
-  console.log("Ask LinkUP server running on port " + PORT);
-});
+          ?
